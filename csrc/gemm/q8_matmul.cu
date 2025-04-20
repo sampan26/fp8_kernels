@@ -1,5 +1,6 @@
 #include <torch/extension.h>
 #include <torch/python.h>
+#include "q8_gemm_api.cuh"
 
 #include "cutlass/cutlass.h"
 #include "cutlass/layout/layout.h"
@@ -9,13 +10,13 @@ using namespace cute;
 
 
 void matmul_fn(int8_t *A, int8_t *B, void *C, float* A_scale, float* B_scale, int B_A, int B_B, int M, int N, int K, bool fuse_gelu) {
-    int B;
+    int Bs;
     TORCH_CHECK(B_A == B_B || (B_A == 1 || B_B == 1), "Batch size mismatch");
 }
 
 
 
-torch::Tensor q8_mm(torch::Tensor a, torch::Tensor a_scale, torch::Tensor b, torch::tensor b_scale, bool fuse_gelu) {
+torch::Tensor q8_mm(torch::Tensor a, torch::Tensor a_scale, torch::Tensor b, torch::Tensor b_scale, bool fuse_gelu) {
     CHECK_INPUT(a);
     CHECK_INPUT(b);
     
@@ -69,5 +70,5 @@ torch::Tensor q8_mm(torch::Tensor a, torch::Tensor a_scale, torch::Tensor b, tor
     cudaDeviceSynchronize();
     CUDA_ERROR_CHECK(cudaGetLastError());
 
-    return out
+    return out;
 }
