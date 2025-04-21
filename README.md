@@ -22,6 +22,7 @@ source .venv/bin/activate
 
 # Install required Python packages
 pip install -r requirements.txt
+pip3 install torch --index-url https://download.pytorch.org/whl/cu118
 pip install git+https://github.com/Dao-AILab/fast-hadamard-transform.git@v1.0.4.post1
 
 mkdir -p third_party
