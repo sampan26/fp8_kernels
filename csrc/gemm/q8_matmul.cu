@@ -55,6 +55,51 @@ void matmul_fn(int8_t *A, int8_t *B, void *C, float* A_scale, float* B_scale, in
     using MMA_PARTITION_TILE = Tile<Int<MMA_WARP_M>, Int<MMA_WARP_N>, Int<MMA_WARP_K>>;
     using MMA = decltype(make_tiled_mma(mma_atom{}, MMA_WARP_Tile{}, MMA_PARTITION_TILE{}));
 
+    using g2s_copy_op = SM80_CP_ASYNC_CACHEGLOBAL<cute::uint128_t>;
+    using g2s_copy_traits = Copy_Traits<g2s_copy_op>;
+    using g2s_copy_atom = Copy_Atom<g2s_copy_atom>;
+    using G2SCopyA = decltype(
+        make_tiled_copy(g2s_copy_atom{}, 
+        make_layout(make_shape(Int<32>{}, Int<4>{}), make_stride(Int<4>{}, Int<1>{})),
+        make_layout(make_shape(Int<1>{}, Int<16>{}))));
+    using G2SCopyB = G2SCopyA;
+
+    using s2r_copy_op_a = SM75_U32x4_LDSM_N;
+    using s2r_copy_traits_a = Copy_Traits<s2r_copy_op_a>;
+    using s2r_copy_atom_a = Copy_Atom<s2r_copy_traits_a, int8_t>;
+
+    using s2r_copy_op_b = SM75_U32x2_LDSM_N;
+    using s2r_copy_traits_b = Copy_Traits<s2r_copy_op_b>;
+    using s2r_copy_atom_b = Copy_Atom<s2r_copy_traits_b, int8_t>;
+
+    using SmemLayoutC = decltype(
+        compostiion(
+            Swizzle<2, 4, 3>{},
+            make_layout(make_shape(Int<MMA_WARP_M>{}, Int<MMA_WARP_N*Int<4>{}>{})),
+            make_stride(Int<MMA_WARP_N*Int<4>{}>{}, Int<1>{}))
+    );
+
+    using R2SCopyAtomC = Copy_Atom<UniversalCopy<cute::uint16_t>, float_e4m3_t>;
+    using S2RCopyAtomC = Copy_Atom<UniversalCopy<cute::uint128_t>, float_e4m3_t>;
+
+    using S2GCopyC =
+        decltype(make_tiled_copy(S2GCopyAtomC{},
+                                make_layout(make_shape(Int<32>{}, Int<4>{}),
+                                            make_stride(Int<4>{}, Int<1>{})),
+                                make_layout(make_shape(Int<1>{}, Int<16>{}))));
+
+    int bX = (N + bN - 1) / bN;
+    int bY = (M + bM - 1) / bM;
+    int bZ = Bs;
+
+    dim3 block(size(MMA{}));
+    dim3 grid(bX, bY, bZ);
+
+    static constexpr int shm_size_AB = cute::cosize(SmemLayoutA) + cute::cosize(SmemLayoutB);
+    static constexpr int shm_size_C = cute::cosize(SmemLayoutC);
+    static constexpr int kShmSize = cute::max(shm_size_AB, shm_size_C) * sizeof(cute::float_e4m3_t);
+
+    int shm_size = kShmSize;
 }
 
 

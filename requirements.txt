@@ -1,3 +1,4 @@
-torch=2.6.0
-ninja=1.11.1.4
-fast_hadamard_transform=1.0.4
+ninja==1.11.1.4
+wheel
+numpy
+packaging
