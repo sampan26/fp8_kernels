@@ -22,6 +22,7 @@ source .venv/bin/activate
 
 # Install required Python packages
 pip install -r requirements.txt
+pip install git+https://github.com/Dao-AILab/fast-hadamard-transform.git@v1.0.4.post1
 
 mkdir -p third_party
 cd third_party

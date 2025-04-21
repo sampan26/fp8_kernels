@@ -8,10 +8,53 @@
 
 using namespace cute;
 
-
 void matmul_fn(int8_t *A, int8_t *B, void *C, float* A_scale, float* B_scale, int B_A, int B_B, int M, int N, int K, bool fuse_gelu) {
     int Bs;
     TORCH_CHECK(B_A == B_B || (B_A == 1 || B_B == 1), "Batch size mismatch");
+
+    if (B_A == 1 || B_B == 1) {
+        Bs = B_A * B_B;
+    }
+    else if (B_A == B_B) {
+        Bs = B_A;
+    }
+    auto bM = Int<128>{};
+    auto bN = Int<128>{};
+    auto bK = Int<64>{};
+    auto bP = Int<2>{};
+
+    using SmemLayoutAtom = decltype(composition(
+        Swizzle<2, 4, 3>{},
+        cute::make_layout(cute::make_shape(Int<8>{}, Int<bK>{}),
+                    cute::make_stride(Int<bK>{}, Int<1>{}))));
+
+    using SmemLayoutA = decltype(
+        cute::tile_to_shape(SmemLayoutAtom{}, cute::make_shape(bM, bK, bP))
+    );
+    
+    using SmemLayoutB = decltype(
+        cute::tile_to_shape(SmemLayoutAtom{}, cute::make_shape(bN, bK, bP))
+    );
+
+    using mma_op = SM80_16x8x32_S32S8S8S32_TN;
+    using mma_traits = MMA_Traits<mma_op>;
+    using mma_atom = MMA_Atom<mma_traits>;
+
+    static constexpr int WARP_ROWS = 2;
+    static constexpr int WARP_COLS = 2;
+    
+    using mma_atom_shape = mma_traits::Shape_MNK;
+
+    static constexpr int MMA_WARP_M = WARP_ROWS * get<0>(mma_atom_shape{});
+    static constexpr int MMA_WARP_N = 1 * WARP_COLS * get<1>(mma_atom_shape{});
+    static constexpr int MMA_WARP_K = 1 * get<2>(mma_atom_shape{});
+
+    using MMA_WARP_Tile = decltype(
+        make_layout(make_shape(Int<WARP_ROWS>{}, Int<WARP_COLS>{}, Int<1>{}))
+    );
+    using MMA_PARTITION_TILE = Tile<Int<MMA_WARP_M>, Int<MMA_WARP_N>, Int<MMA_WARP_K>>;
+    using MMA = decltype(make_tiled_mma(mma_atom{}, MMA_WARP_Tile{}, MMA_PARTITION_TILE{}));
+
 }
 
 
