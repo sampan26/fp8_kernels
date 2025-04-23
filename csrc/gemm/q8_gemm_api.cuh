@@ -1,9 +1,14 @@
 #pragma once
 
+// cuda header file that use nvcc to compile, which can recognize the cuda
+// keyword like __global__ and __device__
+
 #include <cstddef>
 #include <cstdint>
 #include <torch/extension.h>
 
+// NOTE:tensor malloc as device before we call
+// e.g. data.to("cuda") in python
 #define CHECK_CUDA(x)                                                          \
   TORCH_CHECK(x.device().is_cuda(), #x " must be a CUDA tensor")
 #define CHECK_CONTIGUOUS(x)                                                    \

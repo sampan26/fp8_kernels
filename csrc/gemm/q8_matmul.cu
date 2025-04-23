@@ -1,14 +1,14 @@
 #include <torch/extension.h>
 #include <torch/python.h>
 #include "q8_gemm_api.cuh"
-#include "static_switch.h"
 
 #include "cutlass/cutlass.h"
 #include "cutlass/layout/layout.h"
 #include <cute/tensor.hpp>
 
-using namespace cute;
+#include "static_switch.h"
 
+using namespace cute;
 
 inline __device__ float gelu_approximate(float x){
     constexpr float sqrthalfpi2 = 0.7978845608028653558798921198687637369517172623298693153318516593f;
@@ -16,17 +16,25 @@ inline __device__ float gelu_approximate(float x){
     return 0.5f*x*(1.0f + tanhf(sqrthalfpi2*(x + factor*x*x*x)));
 }
 
-template <typename Fragment>
-inline __device__ auto convert_fp32_fp8(Fragment const& fp32_fragment) {
-    Tensor fp8_fragment = make_tensor(<float_e4m3_t>(shape(fp32_fragment)));
+inline __device__ float gelu_erf(float x){
+    return x*0.5f*(1.0f +erff(x * 0.707106781));
+    // return 0.5f*x*(1.0f + tanhf(sqrthalfpi2*(x + factor*x*x*x)));
+}
+
+
+
+template<typename Fragment>
+inline __device__ auto convert_fp32_fp8(Fragment const& fp32_fragment){
+    Tensor fp8_fragment = make_tensor<float_e4m3_t>(shape(fp32_fragment));
     Tensor fp32x2_fragment = recast<float2>(fp32_fragment);
     Tensor fp8x2_fragment = recast<__nv_fp8x2_e4m3>(fp8_fragment);
-    for (int i = 0; i < size(fp32x2_fragment); i++) {
+    for(int i = 0; i<size(fp32x2_fragment);i++){
         uint16_t RC_FP8 = __nv_cvt_float2_to_fp8x2(fp32x2_fragment(i), __nv_saturation_t::__NV_SATFINITE, __nv_fp8_interpretation_t::__NV_E4M3);
         fp8x2_fragment(i) = *reinterpret_cast<__nv_fp8x2_e4m3 *>(&RC_FP8);
     }
     return fp8_fragment;
 }
+
 
 template<bool Is_Even, bool fuse_gelu_activation, int BM, int BN, int BK, bool BATCH_A, bool BATCH_B, int KStages,
         typename TiledMMA, typename G2SCopyA, typename G2SCopyB,
@@ -116,6 +124,7 @@ __global__ void q8_gemm_kernel(const int8_t * Aptr, const int8_t * Bptr,
     auto tAsA = s2r_thr_copy_a.partition_S(sA);     
     auto tCrA_view = s2r_thr_copy_a.retile_D(tCrA); 
 
+
     auto s2r_tiled_copy_b = make_tiled_copy_B(S2RCopyAtomB{}, tiled_mma);
     auto s2r_thr_copy_b = s2r_tiled_copy_b.get_slice(idx);
     auto tBsB = s2r_thr_copy_b.partition_S(sB);    
@@ -171,7 +180,8 @@ __global__ void q8_gemm_kernel(const int8_t * Aptr, const int8_t * Bptr,
                 for (size_t k = 0; k < size<2>(tAsA_copy); k++)
                 {
                     if(get<0>(tAcA(0, m, k)) < residual){
-                        cute::copy(g2s_tiled_copy_a, tAgA_copy(_, m, k, istage), tAsA_copy(_, m, k, istage));
+                        cute::copy(g2s_tiled_copy_a, tAgA_copy(_, m, k, istage),
+                            tAsA_copy(_, m, k, istage));
                     }
                 }  
             }
@@ -343,7 +353,7 @@ __global__ void q8_gemm_kernel(const int8_t * Aptr, const int8_t * Bptr,
     }
 }
 
-void matmul_fn(int8_t *A, int8_t *B, void *C, float* A_scales, float* B_scales, int BA, int BB, int M, int N, int K, bool fuse_gelu){
+void q8_matmul(int8_t *A, int8_t *B, void *C, float* A_scales, float* B_scales, int BA, int BB, int M, int N, int K, bool fuse_gelu){
     
     int BATCH;
     TORCH_CHECK(BB == BB || (BA == 1 || BB==1) , "Batch size missmatch");
@@ -355,7 +365,7 @@ void matmul_fn(int8_t *A, int8_t *B, void *C, float* A_scales, float* B_scales, 
     }
     auto BM = Int<128>{};
     auto BN = Int<128>{};
-    auto BK = Int<64>{};
+    auto BK = Int<64>{}; // MMA_K=32, 2 CHUNKS
     auto KStages = Int<2>{};
 
     using SmemLayoutAtom = decltype(composition(
@@ -523,31 +533,31 @@ void matmul_fn(int8_t *A, int8_t *B, void *C, float* A_scales, float* B_scales, 
 }
 
 
-torch::Tensor q8_mm(torch::Tensor a, torch::Tensor a_scale, torch::Tensor b, torch::Tensor b_scale, bool fuse_gelu) {
+torch::Tensor q8_mm(torch::Tensor a, torch::Tensor a_scales, torch::Tensor b, torch::Tensor b_scales, bool fuse_gelu){
+
     CHECK_INPUT(a);
     CHECK_INPUT(b);
-    
+
     int m, n, k;
 
+    // batch size
     int a_ndim = a.sizes().size();
     int b_ndim = b.sizes().size();
 
     int bs_a;
-    if (a_ndim == 3) {
+    if(a_ndim == 3){
         bs_a = a.size(0);
         m = a.size(1);
-    }
-    else {
+    } else {
         bs_a = 1;
         m = a.size(0);
     }
-
+    
     int bs_b;
-    if (b_ndim == 3) {
+    if(b_ndim == 3){
         bs_b = b.size(0);
         n = b.size(1);
-    }
-    else {
+    } else {
         bs_b = 1;
         n = b.size(0);
     }
@@ -556,24 +566,18 @@ torch::Tensor q8_mm(torch::Tensor a, torch::Tensor a_scale, torch::Tensor b, tor
 
     TORCH_CHECK(bs_a == bs_b || bs_a == 1 || bs_b == 1, "Batch missmatch");
 
-    int B;
-    if (a_ndim == 1 || b_ndim == 1) {
-        B = bs_a * bs_b;
+    int batch;
+    if(bs_a == 1 || bs_b == 1){
+        batch = bs_a * bs_b;
+    } else {
+        batch = bs_a;
     }
-    else {
-        B = bs_a;
-    }
-    auto opts = a.options();
-    auto out = torch::empty({B, m, n}, opts.dtype(torch::kFloat8_e4m3fn));
 
-    matmul_fn(
-        a.data_ptr<int8_t>(), 
-        b.data_ptr<int8_t>(), 
-        out.data_ptr(), 
-        a_scale.data_ptr<float>(), 
-        b_scale.data_ptr<float>(), 
-        bs_a, bs_b, m, n, k, fuse_gelu
-    );
+    auto opts = a.options();
+    auto out = torch::empty({batch, m, n}, opts.dtype(torch::kFloat8_e4m3fn));
+
+    q8_matmul(a.data_ptr<int8_t>(), b.data_ptr<int8_t>(), out.data_ptr(), a_scales.data_ptr<float>(), b_scales.data_ptr<float>(), bs_a, bs_b, m, n, k, fuse_gelu);
+
     cudaDeviceSynchronize();
     CUDA_ERROR_CHECK(cudaGetLastError());
 
