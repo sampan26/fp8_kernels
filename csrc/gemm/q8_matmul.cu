@@ -54,7 +54,7 @@ template<bool Is_Even, bool fuse_gelu_activation, int BM, int BN, int BK, bool B
 
         typename S2RCopyAtomA, typename S2RCopyAtomB,
         typename R2SCopyAtomC, typename S2GCopyAtomC, typename S2GCopyC>
-__global__ void q8_gemm_kernel(const int8_t * Aptr, const int8_t * Bptr, 
+__global__ void gemm_q8_kernel(const int8_t * Aptr, const int8_t * Bptr, 
                                  const float* A_scales, const float* B_scales,
                                  float_e4m3_t*  Cptr, 
                                  int M,
@@ -353,7 +353,7 @@ __global__ void q8_gemm_kernel(const int8_t * Aptr, const int8_t * Bptr,
     }
 }
 
-void q8_matmul(int8_t *A, int8_t *B, void *C, float* A_scales, float* B_scales, int BA, int BB, int M, int N, int K, bool fuse_gelu){
+void run_q8_gemm(int8_t *A, int8_t *B, void *C, float* A_scales, float* B_scales, int BA, int BB, int M, int N, int K, bool fuse_gelu){
     
     int BATCH;
     TORCH_CHECK(BB == BB || (BA == 1 || BB==1) , "Batch size missmatch");
@@ -505,10 +505,10 @@ void q8_matmul(int8_t *A, int8_t *B, void *C, float* A_scales, float* B_scales, 
     using I2TVBScale = decltype(right_inverse(BScaleTV{}));
 
     bool is_even = M % BM == 0;
-    BOOL_SWITCH(fuse_gelu, fuse_gelu_, [&]{
-        BOOL_SWITCH(is_even, Is_Even, [&]{
-            BATCH_SWITCH(BA, BB, [&]{
-                auto kernel = &q8_gemm_kernel<Is_Even, fuse_gelu_, BM, BN, BK, BA_, BB_, KStages, MMA,
+    BOOL_SWITCH(fuse_gelu, fuse_gelu_, {
+        BOOL_SWITCH(is_even, Is_Even, {
+            // BATCH_SWITCH(BA, BB, 
+                auto kernel = &gemm_q8_kernel<Is_Even, fuse_gelu_, BM, BN, BK, true, true, KStages, MMA,
                                                 G2SCopyA, G2SCopyB, 
                                                 SmemLayoutA, SmemLayoutB, SmemLayoutC, 
 
@@ -527,13 +527,14 @@ void q8_matmul(int8_t *A, int8_t *B, void *C, float* A_scales, float* B_scales, 
                 cudaFuncSetAttribute(
                                 kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, shm_size);
                 kernel<<<grid, block, shm_size>>>((int8_t*)A, (int8_t*)B, A_scales, B_scales, (float_e4m3_t*)C, M, N, K, BATCH);
-            });
+            // );
         });
     });
+
 }
 
 
-torch::Tensor q8_mm(torch::Tensor a, torch::Tensor a_scales, torch::Tensor b, torch::Tensor b_scales, bool fuse_gelu){
+torch::Tensor q8_mm(torch::Tensor a, torch::Tensor b, torch::Tensor a_scales, torch::Tensor b_scales, bool fuse_gelu){
 
     CHECK_INPUT(a);
     CHECK_INPUT(b);
@@ -576,7 +577,7 @@ torch::Tensor q8_mm(torch::Tensor a, torch::Tensor a_scales, torch::Tensor b, to
     auto opts = a.options();
     auto out = torch::empty({batch, m, n}, opts.dtype(torch::kFloat8_e4m3fn));
 
-    q8_matmul(a.data_ptr<int8_t>(), b.data_ptr<int8_t>(), out.data_ptr(), a_scales.data_ptr<float>(), b_scales.data_ptr<float>(), bs_a, bs_b, m, n, k, fuse_gelu);
+    run_q8_gemm(a.data_ptr<int8_t>(), b.data_ptr<int8_t>(), out.data_ptr(), a_scales.data_ptr<float>(), b_scales.data_ptr<float>(), bs_a, bs_b, m, n, k, fuse_gelu);
 
     cudaDeviceSynchronize();
     CUDA_ERROR_CHECK(cudaGetLastError());
