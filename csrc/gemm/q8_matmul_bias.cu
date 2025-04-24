@@ -17,8 +17,7 @@ inline __device__ float gelu_approximate(float x){
 }
 
 inline __device__ float gelu_erf(float x){
-    return x*0.5f*(1.0f +erff(x * 0.707106781));
-    // return 0.5f*x*(1.0f + tanhf(sqrthalfpi2*(x + factor*x*x*x)));
+    return x*0.5f*(1.0f +erff(x * 0.707106781f));
 }
 
 
@@ -36,7 +35,7 @@ inline __device__ auto convert_fp32_fp8(Fragment const& fp32_fragment){
 }
 
 
-template<bool Is_Even, bool fuse_gelu_activation, int BM, int BN, int BK, int KStages,
+template<bool Is_Even, bool fuse_gelu_activation, int BM, int BN, int BK, bool BATCH_A, bool BATCH_B, int KStages,
         typename TiledMMA, typename G2SCopyA, typename G2SCopyB,
         typename SmemLayoutA, typename SmemLayoutB, typename SmemLayoutC,
 
@@ -54,7 +53,7 @@ template<bool Is_Even, bool fuse_gelu_activation, int BM, int BN, int BK, int KS
 
         typename S2RCopyAtomA, typename S2RCopyAtomB,
         typename R2SCopyAtomC, typename S2GCopyAtomC, typename S2GCopyC>
-__global__ void gemm_q8_kernel(const int8_t * Aptr, const int8_t * Bptr, 
+__global__ void gemm_q8_kernel_bias(const int8_t * Aptr, const int8_t * Bptr, const float* bias_ptr,
                                  const float* A_scales, const float* B_scales,
                                  float_e4m3_t*  Cptr, 
                                  int M,
@@ -62,24 +61,15 @@ __global__ void gemm_q8_kernel(const int8_t * Aptr, const int8_t * Bptr,
                                  int BATCH,
                                  bool BATCH_A, bool BATCH_B){
 
-    extern __shared__ uint8_t shm_raw[];
+    extern __shared__ float shm_data[];
 
-    uint8_t*  cursor = shm_raw;
-
-    float*    Ascale_shm = reinterpret_cast<float*>(cursor);
-    cursor += cosize(SmemLayoutScaleA{}) * sizeof(float);
-
-    float*    BScale_shm = reinterpret_cast<float*>(cursor);
-    cursor += cosize(SmemLayoutScaleB{}) * sizeof(float);
-
-    int8_t*   Ashm       = reinterpret_cast<int8_t*>(cursor);
-    cursor += cosize(SmemLayoutA{}) * sizeof(int8_t);
-
-    int8_t*   Bshm       = reinterpret_cast<int8_t*>(cursor);
-    cursor += cosize(SmemLayoutB{}) * sizeof(int8_t);
-
-    float_e4m3_t* Cshm   = reinterpret_cast<float_e4m3_t*>(cursor);
-    cursor += cosize(SmemLayoutC{}) * sizeof(float_e4m3_t);
+    float *bias_shm = shm_data;
+    float *Ascale_shm = shm_data + cosize(SmemLayoutScaleB{});
+    float *BScale_shm = Ascale_shm + cosize(SmemLayoutScaleA{});
+    
+    int8_t *Ashm = (int8_t*)(shm_data + cosize(SmemLayoutScaleB{}) + cosize(SmemLayoutScaleA{}) + cosize(SmemLayoutScaleB{}));
+    float_e4m3_t* Cshm = (float_e4m3_t*)(shm_data + cosize(SmemLayoutScaleB{}) +cosize(SmemLayoutScaleA{}) + cosize(SmemLayoutScaleA{}));
+    int8_t *Bshm = (int8_t*)(Ashm + cosize(SmemLayoutA{}));
 
     int idx = threadIdx.x;
     int ix = blockIdx.x;
@@ -96,7 +86,9 @@ __global__ void gemm_q8_kernel(const int8_t * Aptr, const int8_t * Bptr,
     Tensor A = make_tensor(make_gmem_ptr(Aptr + batch_a_offset), make_shape(M, K), make_stride(K, Int<1>{}));
     Tensor B = make_tensor(make_gmem_ptr(Bptr + batch_b_offset), make_shape(N, K), make_stride(K, Int<1>{}));
     Tensor D = make_tensor(make_gmem_ptr(Cptr + batch_c_offset), make_shape(M, N), make_stride(N, Int<1>{}));
-
+    
+    Tensor Bias = make_tensor(make_gmem_ptr(bias_ptr), make_shape(_1{}, N), make_stride(N, Int<1>{}));
+    
     Tensor AScales = make_tensor(make_gmem_ptr(A_scales + batch_ascales_offset), make_shape(_1{}, M), make_stride(M, Int<1>{}));
     Tensor BScales = make_tensor(make_gmem_ptr(B_scales + batch_bscales_offset), make_shape(_1{}, N), make_stride(N, Int<1>{}));
 
@@ -104,12 +96,16 @@ __global__ void gemm_q8_kernel(const int8_t * Aptr, const int8_t * Bptr,
     Tensor gB = local_tile(B, make_tile(Int<BN>{}, Int<BK>{}), make_coord(ix, _)); 
     Tensor gD = local_tile(D, make_tile(Int<BM>{}, Int<BN>{}), make_coord(iy, ix)); 
 
+    Tensor gBias = local_tile(Bias, make_tile(Int<1>{}, Int<BN>{}), make_coord(_, ix));
+
     Tensor gAscales = local_tile(AScales, make_tile(Int<1>{}, Int<BM>{}), make_coord(_, iy));
     Tensor gBscales = local_tile(BScales, make_tile(Int<1>{}, Int<BN>{}), make_coord(_, ix));
 
     auto sA = make_tensor(make_smem_ptr(Ashm), SmemLayoutA{}); 
     auto sB = make_tensor(make_smem_ptr(Bshm), SmemLayoutB{});
-      
+    
+    auto sBias = make_tensor(make_smem_ptr(bias_shm), SmemLayoutScaleB{});
+
     auto sAscales = make_tensor(make_smem_ptr(Ascale_shm), SmemLayoutScaleA{});
     auto sBscales = make_tensor(make_smem_ptr(BScale_shm), SmemLayoutScaleB{});
 
@@ -154,6 +150,9 @@ __global__ void gemm_q8_kernel(const int8_t * Aptr, const int8_t * Bptr,
     auto tBScalegBScale = g2s_scale_thr_copy_b.partition_S(gBscales);
     auto tBScalesBScale = g2s_scale_thr_copy_b.partition_D(sBscales);
     
+    auto tCBiasgBias = g2s_scale_thr_copy_b.partition_S(gBias);
+    auto tCBiassBias = g2s_scale_thr_copy_b.partition_D(sBias);
+    
     auto cA = make_identity_tensor(make_shape(size<0>(sA), size<1>(sA)));
     auto tAcA = g2s_thr_copy_a.partition_S(cA);
     
@@ -172,6 +171,7 @@ __global__ void gemm_q8_kernel(const int8_t * Aptr, const int8_t * Bptr,
             if(istage == 0){
                 cute::copy(g2s_scale_copy_a, tAScalegAScale(_, _, _, _0{}), tAScalesAScale);
                 cute::copy(g2s_scale_copy_b, tBScalegBScale(_, _, _, _0{}), tBScalesBScale); 
+                cute::copy(g2s_scale_copy_b, tCBiasgBias(_, _, _, _0{}), tCBiassBias); 
             }
 
             cute::copy(g2s_tiled_copy_a, tAgA_copy(_, _, _, istage),
@@ -186,6 +186,7 @@ __global__ void gemm_q8_kernel(const int8_t * Aptr, const int8_t * Bptr,
             if(istage == 0){
                 cute::copy_if(g2s_scale_copy_a, tAscalepAscale, tAScalegAScale(_, _, _, _0{}), tAScalesAScale);
                 cute::copy(g2s_scale_copy_b, tBScalegBScale(_, _, _, _0{}), tBScalesBScale); 
+                cute::copy(g2s_scale_copy_b, tCBiasgBias(_, _, _, _0{}), tCBiassBias); 
             }
             for (size_t m = 0; m < size<1>(tAsA_copy); m++)
             {
@@ -282,11 +283,15 @@ __global__ void gemm_q8_kernel(const int8_t * Aptr, const int8_t * Bptr,
     
     auto tCrAscales_copy = make_tensor<float>(LayoutScaleAV_D{});
     auto tCrBscales_copy = make_tensor<float>(LayoutScaleBV_D{});
+
+    auto tCrBias_copy = make_tensor<float>(LayoutScaleBV_D{});
+    
     
     auto tCrAscales = make_tensor(tCrAscales_copy.data(), LayoutScaleAV_DView{});
     auto tCrBscales = make_tensor(tCrBscales_copy.data(), LayoutScaleBV_DView{});
   
-
+    auto tCrBias = make_tensor(tCrBias_copy.data(), LayoutScaleBV_DView{});
+    
     auto a_scales_tv = AScaleTV{};
     auto b_scales_tv = BScaleTV{};
     
@@ -304,6 +309,9 @@ __global__ void gemm_q8_kernel(const int8_t * Aptr, const int8_t * Bptr,
     {
         tCrBscales(0, mma_n, 0) = sBscales(b_scales_tv(idx, make_coord(0, mma_n)));
         tCrBscales(1, mma_n, 0) = sBscales(b_scales_tv(idx, make_coord(1, mma_n)));
+
+        tCrBias(0, mma_n, 0) = sBias(b_scales_tv(idx, make_coord(0, mma_n)));
+        tCrBias(1, mma_n, 0) = sBias(b_scales_tv(idx, make_coord(1, mma_n)));
     }
     
 
@@ -312,15 +320,15 @@ __global__ void gemm_q8_kernel(const int8_t * Aptr, const int8_t * Bptr,
         for (size_t mma_n = 0; mma_n < size<2>(tCrD_fp32); mma_n++)
         {   
             if constexpr (fuse_gelu_activation){
-                tCrD_fp32(_0{}, mma_m, mma_n) = gelu_approximate(tCrD_fp32(_0{}, mma_m, mma_n) * (tCrAscales(_0{}, mma_m, _0{}) * tCrBscales(_0{}, mma_n, _0{})));
-                tCrD_fp32(_1{}, mma_m, mma_n) = gelu_approximate(tCrD_fp32(_1{}, mma_m, mma_n) * (tCrAscales(_1{}, mma_m, _0{}) * tCrBscales(_1{}, mma_n, _0{})));
-                tCrD_fp32(_2{}, mma_m, mma_n) = gelu_approximate(tCrD_fp32(_2{}, mma_m, mma_n) * (tCrAscales(_2{}, mma_m, _0{}) * tCrBscales(_2{}, mma_n, _0{})));
-                tCrD_fp32(_3{}, mma_m, mma_n) = gelu_approximate(tCrD_fp32(_3{}, mma_m, mma_n) * (tCrAscales(_3{}, mma_m, _0{}) * tCrBscales(_3{}, mma_n, _0{})));
+                tCrD_fp32(_0{}, mma_m, mma_n) = gelu_approximate(tCrD_fp32(_0{}, mma_m, mma_n) * (tCrAscales(_0{}, mma_m, _0{}) * tCrBscales(_0{}, mma_n, _0{})) + tCrBias(_0{}, mma_n, _0{}));
+                tCrD_fp32(_1{}, mma_m, mma_n) = gelu_approximate(tCrD_fp32(_1{}, mma_m, mma_n) * (tCrAscales(_1{}, mma_m, _0{}) * tCrBscales(_1{}, mma_n, _0{})) + tCrBias(_1{}, mma_n, _0{}));
+                tCrD_fp32(_2{}, mma_m, mma_n) = gelu_approximate(tCrD_fp32(_2{}, mma_m, mma_n) * (tCrAscales(_2{}, mma_m, _0{}) * tCrBscales(_2{}, mma_n, _0{})) + tCrBias(_2{}, mma_n, _0{}));
+                tCrD_fp32(_3{}, mma_m, mma_n) = gelu_approximate(tCrD_fp32(_3{}, mma_m, mma_n) * (tCrAscales(_3{}, mma_m, _0{}) * tCrBscales(_3{}, mma_n, _0{})) + tCrBias(_3{}, mma_n, _0{}));
             } else {
-                tCrD_fp32(_0{}, mma_m, mma_n) = tCrD_fp32(_0{}, mma_m, mma_n) * (tCrAscales(_0{}, mma_m, _0{}) * tCrBscales(_0{}, mma_n, _0{}));
-                tCrD_fp32(_1{}, mma_m, mma_n) = tCrD_fp32(_1{}, mma_m, mma_n) * (tCrAscales(_1{}, mma_m, _0{}) * tCrBscales(_1{}, mma_n, _0{}));
-                tCrD_fp32(_2{}, mma_m, mma_n) = tCrD_fp32(_2{}, mma_m, mma_n) * (tCrAscales(_2{}, mma_m, _0{}) * tCrBscales(_2{}, mma_n, _0{}));
-                tCrD_fp32(_3{}, mma_m, mma_n) = tCrD_fp32(_3{}, mma_m, mma_n) * (tCrAscales(_3{}, mma_m, _0{}) * tCrBscales(_3{}, mma_n, _0{}));
+                tCrD_fp32(_0{}, mma_m, mma_n) = tCrD_fp32(_0{}, mma_m, mma_n) * (tCrAscales(_0{}, mma_m, _0{}) * tCrBscales(_0{}, mma_n, _0{})) + tCrBias(_0{}, mma_n, _0{});
+                tCrD_fp32(_1{}, mma_m, mma_n) = tCrD_fp32(_1{}, mma_m, mma_n) * (tCrAscales(_1{}, mma_m, _0{}) * tCrBscales(_1{}, mma_n, _0{})) + tCrBias(_1{}, mma_n, _0{});
+                tCrD_fp32(_2{}, mma_m, mma_n) = tCrD_fp32(_2{}, mma_m, mma_n) * (tCrAscales(_2{}, mma_m, _0{}) * tCrBscales(_2{}, mma_n, _0{})) + tCrBias(_2{}, mma_n, _0{});
+                tCrD_fp32(_3{}, mma_m, mma_n) = tCrD_fp32(_3{}, mma_m, mma_n) * (tCrAscales(_3{}, mma_m, _0{}) * tCrBscales(_3{}, mma_n, _0{})) + tCrBias(_3{}, mma_n, _0{});
             }
            
         }
@@ -365,7 +373,7 @@ __global__ void gemm_q8_kernel(const int8_t * Aptr, const int8_t * Bptr,
     }
 }
 
-void run_q8_gemm(int8_t *A, int8_t *B, void *C, float* A_scales, float* B_scales, int BA, int BB, int M, int N, int K, bool fuse_gelu){
+void run_q8_gemm_bias(int8_t *A, int8_t *B,  float* bias, void *C, float* A_scales, float* B_scales, int BA, int BB, int M, int N, int K, bool fuse_gelu){
     
     int BATCH;
     TORCH_CHECK(BB == BB || (BA == 1 || BB==1) , "Batch size missmatch");
@@ -453,13 +461,7 @@ void run_q8_gemm(int8_t *A, int8_t *B, void *C, float* A_scales, float* B_scales
     dim3 block(size(MMA{}));
     dim3 grid(BX, BY, BZ);
 
-    static constexpr int shm_size_AB =
-        cute::cosize(SmemLayoutA{}) + cute::cosize(SmemLayoutB{});
-    static constexpr int shm_size_C = cute::cosize(SmemLayoutC{});
-    static constexpr int kShmSize =
-        cute::max(shm_size_AB, shm_size_C) * sizeof(cute::float_e4m3_t);
 
-    int shm_size = kShmSize;
     
      
     using G2SScales_copy_op = SM80_CP_ASYNC_CACHEALWAYS<float>;
@@ -516,12 +518,22 @@ void run_q8_gemm(int8_t *A, int8_t *B, void *C, float* A_scales, float* B_scales
                             >>;
     using I2TVBScale = decltype(right_inverse(BScaleTV{}));
 
+    
+    static constexpr int shm_size_scales = cute::cosize(SmemLayoutScaleA{}) + cute::cosize(SmemLayoutScaleB{});
+    static constexpr int shm_size_AB =
+        cute::cosize(SmemLayoutA{}) + cute::cosize(SmemLayoutB{});
+    static constexpr int shm_size_C = cute::cosize(SmemLayoutC{});
+    static constexpr int kShmSize =
+        cute::max(shm_size_AB, shm_size_C) * sizeof(cute::float_e4m3_t) + shm_size_scales*sizeof(float) + cute::cosize(SmemLayoutScaleB{})*sizeof(float);
+
+    int shm_size = kShmSize;
+
     bool is_even = M % BM == 0;
     bool BA_ = (BA != 1);
     bool BB_ = (BB != 1);
     BOOL_SWITCH(fuse_gelu, fuse_gelu_, {
         BOOL_SWITCH(is_even, Is_Even, {
-                auto kernel = &gemm_q8_kernel<
+                auto kernel = &gemm_q8_kernel_bias<
                     Is_Even, fuse_gelu_,
                     BM, BN, BK,
                     KStages, MMA,
@@ -537,29 +549,24 @@ void run_q8_gemm(int8_t *A, int8_t *B, void *C, float* A_scales, float* B_scales
                     BScaleTV, I2TVBScale,
                     s2r_copy_atom_a, s2r_copy_atom_b,
                     R2SCopyAtomC, S2GCopyAtomC, S2GCopyC>;
-
                 cudaFuncSetAttribute(
                     kernel,
                     cudaFuncAttributeMaxDynamicSharedMemorySize,
                     shm_size);
-
-                kernel<<<grid, block, shm_size>>>(
-                    (int8_t*)A, (int8_t*)B,
-                    A_scales, B_scales,
-                    (float_e4m3_t*)C,
-                    M, N, K, BATCH, BA_, BB_);                                               // <── CLOSE!
+                kernel<<<grid, block, shm_size>>>((int8_t*)A, (int8_t*)B, bias, A_scales, B_scales, (float_e4m3_t*)C, M, N, K, BATCH, BA_, BB_);
         });
     });
-
-
 }
 
 
-torch::Tensor q8_mm(torch::Tensor a, torch::Tensor b, torch::Tensor a_scales, torch::Tensor b_scales, bool fuse_gelu){
+torch::Tensor q8_mm_bias(torch::Tensor a, torch::Tensor b, torch::Tensor bias, torch::Tensor a_scales, torch::Tensor b_scales, bool fuse_gelu){
 
     CHECK_INPUT(a);
     CHECK_INPUT(b);
-
+    CHECK_INPUT(bias);
+    CHECK_INPUT(a_scales);
+    CHECK_INPUT(b_scales);
+    
     int m, n, k;
 
     // batch size
@@ -587,7 +594,7 @@ torch::Tensor q8_mm(torch::Tensor a, torch::Tensor b, torch::Tensor a_scales, to
     k = a.size(a_ndim - 1);
 
     TORCH_CHECK(bs_a == bs_b || bs_a == 1 || bs_b == 1, "Batch missmatch");
-
+    
     int batch;
     if(bs_a == 1 || bs_b == 1){
         batch = bs_a * bs_b;
@@ -598,7 +605,9 @@ torch::Tensor q8_mm(torch::Tensor a, torch::Tensor b, torch::Tensor a_scales, to
     auto opts = a.options();
     auto out = torch::empty({batch, m, n}, opts.dtype(torch::kFloat8_e4m3fn));
 
-    run_q8_gemm(a.data_ptr<int8_t>(), b.data_ptr<int8_t>(), out.data_ptr(), a_scales.data_ptr<float>(), b_scales.data_ptr<float>(), bs_a, bs_b, m, n, k, fuse_gelu);
+    run_q8_gemm_bias(a.data_ptr<int8_t>(), b.data_ptr<int8_t>(), bias.data_ptr<float>(), out.data_ptr(), 
+                a_scales.data_ptr<float>(), b_scales.data_ptr<float>(), 
+                bs_a, bs_b, m, n, k, fuse_gelu);
 
     cudaDeviceSynchronize();
     CUDA_ERROR_CHECK(cudaGetLastError());
