@@ -57,6 +57,7 @@ at::Tensor rms_norm(at::Tensor &x, at::Tensor& weights) {
 
     const int dim = x.size(1);
 
+  
     at::Tensor out = torch::empty_like(x);
     
     RMSNormsParamsBase params;

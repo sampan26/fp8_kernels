@@ -70,7 +70,7 @@ ext_modules.append(
             Path(current_dir) / "third_party/cutlass/include",
             Path(current_dir) / "third_party/cutlass/tools/utils/include" ,
             Path(current_dir) / "third_party/cutlass/examples/common" ,
-            # Path(this_dir) / "some" / "thing" / "more",
+            # Path(current_dir) / "some" / "thing" / "more",
         ],
     )
 )
@@ -109,11 +109,11 @@ ext_modules.append(
                 + cc_flag,
         },
         include_dirs=[
-            Path(this_dir) / "csrc"/"ops",
-            Path(this_dir) / "third_party/cutlass/include",
-            Path(this_dir) / "third_party/cutlass/tools/utils/include" ,
-            Path(this_dir) / "third_party/cutlass/examples/common" ,
-            # Path(this_dir) / "some" / "thing" / "more",
+            Path(current_dir) / "csrc"/"ops",
+            Path(current_dir) / "third_party/cutlass/include",
+            Path(current_dir) / "third_party/cutlass/tools/utils/include" ,
+            Path(current_dir) / "third_party/cutlass/examples/common" ,
+            # Path(current_dir) / "some" / "thing" / "more",
         ],
     )
 )

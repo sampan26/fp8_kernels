@@ -62,24 +62,13 @@ __global__ void gemm_q8_kernel(const int8_t * Aptr, const int8_t * Bptr,
                                  int BATCH,
                                  bool BATCH_A, bool BATCH_B){
 
-    extern __shared__ uint8_t shm_raw[];
+    extern __shared__ float shm_data[];
 
-    uint8_t*  cursor = shm_raw;
-
-    float*    Ascale_shm = reinterpret_cast<float*>(cursor);
-    cursor += cosize(SmemLayoutScaleA{}) * sizeof(float);
-
-    float*    BScale_shm = reinterpret_cast<float*>(cursor);
-    cursor += cosize(SmemLayoutScaleB{}) * sizeof(float);
-
-    int8_t*   Ashm       = reinterpret_cast<int8_t*>(cursor);
-    cursor += cosize(SmemLayoutA{}) * sizeof(int8_t);
-
-    int8_t*   Bshm       = reinterpret_cast<int8_t*>(cursor);
-    cursor += cosize(SmemLayoutB{}) * sizeof(int8_t);
-
-    float_e4m3_t* Cshm   = reinterpret_cast<float_e4m3_t*>(cursor);
-    cursor += cosize(SmemLayoutC{}) * sizeof(float_e4m3_t);
+    float *Ascale_shm = shm_data;
+    float *BScale_shm = shm_data + cosize(SmemLayoutScaleA{});
+    int8_t *Ashm = (int8_t*)(shm_data + cosize(SmemLayoutScaleA{}) + cosize(SmemLayoutScaleA{}));
+    float_e4m3_t* Cshm = (float_e4m3_t*)(shm_data + cosize(SmemLayoutScaleA{}) + cosize(SmemLayoutScaleA{}));
+    int8_t *Bshm = (int8_t*)(Ashm + cosize(SmemLayoutA{}));
 
     int idx = threadIdx.x;
     int ix = blockIdx.x;
@@ -547,7 +536,7 @@ void run_q8_gemm(int8_t *A, int8_t *B, void *C, float* A_scales, float* B_scales
                     (int8_t*)A, (int8_t*)B,
                     A_scales, B_scales,
                     (float_e4m3_t*)C,
-                    M, N, K, BATCH, BA_, BB_);                                               // <── CLOSE!
+                    M, N, K, BATCH, BA_, BB_);                                               
         });
     });
 
