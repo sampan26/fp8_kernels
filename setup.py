@@ -75,6 +75,46 @@ ext_modules.append(
     )
 )
 
+ext_modules.append(
+    CUDAExtension(
+        # package name for import
+        name="q8_matmul.quantizer._C",
+        sources=[
+            "csrc/quantizer/tokenwise_quant.cpp",
+            "csrc/quantizer/tokenwise_quant_cuda.cu",
+        ],
+          extra_compile_args={
+            # add c compile flags
+            "cxx": ["-O3", "-std=c++17"] + generator_flag,
+            # add nvcc compile flags
+            "nvcc": [
+                    "-O3",
+                    "-std=c++17",
+                    "-U__CUDA_NO_HALF_OPERATORS__",
+                    "-lineinfo",
+                    "--ptxas-options=-v",
+                    "--ptxas-options=-O2",
+                    "-U__CUDA_NO_HALF_OPERATORS__",
+                    "-U__CUDA_NO_HALF_CONVERSIONS__",
+                    "-U__CUDA_NO_HALF2_OPERATORS__",
+                    "-U__CUDA_NO_BFLOAT16_CONVERSIONS__",
+                    "--expt-relaxed-constexpr",
+                    "--expt-extended-lambda",
+                    "--use_fast_math",
+
+                ]
+                + generator_flag
+                + cc_flag,
+        },
+        include_dirs=[
+            Path(current_dir) / "csrc"/"quantizer",
+            Path(current_dir) / "third_party/cutlass/include",
+            Path(current_dir) / "third_party/cutlass/tools/utils/include" ,
+            Path(current_dir) / "third_party/cutlass/examples/common" ,
+            # Path(this_dir) / "some" / "thing" / "more",
+        ],
+    )
+)
 
 ext_modules.append(
     CUDAExtension(

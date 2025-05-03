@@ -32,8 +32,11 @@ cd ..
 
 mkdir -p q8_matmul/gemm
 mkdir -p q8_matmul/ops
+mkdir -p q8_matmul/quantizer
 touch q8_matmul/__init__.py
 touch q8_matmul/gemm/__init__.py
 touch q8_matmul/ops/__init__.py
+touch q8_matmul/quantizer/__init__.py
+
 
 python setup.py build_ext --inplace
