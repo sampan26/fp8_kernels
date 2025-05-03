@@ -84,6 +84,8 @@ ext_modules.append(
             "csrc/ops/ops_api.cpp",
             "csrc/ops/rms_norm.cpp",
             "csrc/ops/rms_norm_cuda.cu",
+            "csrc/ops/rope.cpp",
+            "csrc/ops/rope_cuda.cu",
         ],
           extra_compile_args={
             # add c compile flags

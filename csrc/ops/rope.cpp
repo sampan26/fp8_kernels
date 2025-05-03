@@ -37,7 +37,7 @@ void set_rope_params(
     params.out_batch_stride = out.stride(0);
 
     params.cos_freq_batch_stride = cos_freqs.stride(0);
-    params.sin_freq_batch_stride = sin_freq.stride(0);
+    params.sin_freq_batch_stride = sin_freqs.stride(0);
 
 }
 
@@ -60,7 +60,7 @@ at::Tensor rope(at::Tensor &x, at::Tensor &cos_freqs, at::Tensor &sin_freqs) {
     cos_freqs = cos_freqs.reshape({-1, dim_og});
     sin_freqs = sin_freqs.reshape({-1, dim_og});
 
-    if (x.stride(-1) != 1) { x = x.contigous(); }
+    if (x.stride(-1) != 1) { x = x.contiguous(); }
 
     const auto sizes = x.sizes();
     const auto batch_size = sizes[0];
