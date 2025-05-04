@@ -122,10 +122,15 @@ ext_modules.append(
         name="q8_matmul.ops._C",
         sources=[
             "csrc/ops/ops_api.cpp",
+
             "csrc/ops/rms_norm.cpp",
             "csrc/ops/rms_norm_cuda.cu",
+
             "csrc/ops/rope.cpp",
             "csrc/ops/rope_cuda.cu",
+
+            "csrc/ops/fma.cpp",
+            "csrc/ops/fma_cuda.cu",
         ],
           extra_compile_args={
             # add c compile flags
