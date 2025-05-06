@@ -11,7 +11,7 @@ void flash_attention_cuda(void* Q_ptr, void* K_ptr, void* V_ptrx, void* O_ptr,
                                 size_t bs, size_t nh, size_t N, size_t dim,  float softmax_scale, cudaStream_t stream);
 
 tensor::Tensor flash_attention(torch::Tensor& q, torch::Tensor& k, torch::Tensor &v, 
-                                float softmax_scale, c10::optional<at::Tensor>& batch_mask_) {
+                                float softmax_scale, bool is_causal, c10::optional<at::Tensor>& batch_mask_) {
     int bs = q.size(0);
     int nh = q.size(1);
     int N = q.size(2);
@@ -23,7 +23,7 @@ tensor::Tensor flash_attention(torch::Tensor& q, torch::Tensor& k, torch::Tensor
 
     auto out = torch::empty_like(q);
     
-    if (batch_mask_.has_value()) {
+    if (is_causal) {
         at::Tensor batch_mask;
         batch_mask = batch_mask_.value();
         TORCH_CHECK(batch_mask.dtype() == torch::kInt32, "flash attn: mask type error");
