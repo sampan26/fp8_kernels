@@ -241,7 +241,7 @@ inline __device__ void apply_mask(Tensor<Engine, Layout> &tensor_,
             const int col_idx = col_idx_base + j;
             #pragma unroll
             for (int mi = 0; mi < size<0>(tensor); ++mi) {
-                if (col_idx >= max_seqlen_k) { tensor(mi, make_coord(j, nj)) = -1000000.0f; }
+                if (col_idx >= max_seqlen_k) { tensor(mi, make_coord(j, nj)) = -INFINITY; }
             }
         }
     }
@@ -251,10 +251,10 @@ inline __device__ void apply_mask(Tensor<Engine, Layout> &tensor_,
 } 
 
 template<bool Is_Even=true>
-__global__ void flash_attention_v2_cutlass_mask_kernel(
-    float_e4m3_t* Q_ptr, float_e4m3_t* K_ptr, float_e4m3_t* V_ptr, int* BatchMask,
+__global__ void flash_attention_v2_cutlass_kernel(
+    float_e4m3_t* Q_ptr, float_e4m3_t* K_ptr, float_e4m3_t* V_ptr, 
     float_e4m3_t* O_ptr, 
-    size_t BATCH, size_t HEADS, size_t M, size_t N, float softmax_scale
+    size_t BATCH, size_t M, size_t N, float softmax_scale
 ) {
 
     using namespace cute;
@@ -315,8 +315,7 @@ __global__ void flash_attention_v2_cutlass_mask_kernel(
     const int bs_head_offset_q = base_id * kHeadDim * M;
     const int bs_head_offset_k = base_id * kHeadDim * N;
     const int bs_head_offset_v = base_id * kHeadDim * V_N;
-
-    const int MASK_N = BatchMask[base_id / (int)HEADS];    
+    
 
     Tensor Q = make_tensor(
         make_gmem_ptr(Q_ptr + bs_head_offset_q),
@@ -426,7 +425,7 @@ __global__ void flash_attention_v2_cutlass_mask_kernel(
             smem_thr_copy_Q, smem_thr_copy_K
         );
 
-        flash::apply_mask(rAccScore, n_block * kBlockN, MASK_N);
+        flash::apply_mask(rAccScore, n_block * kBlockN, N);
         Tensor scores = make_tensor(rAccScore.data(), flash::convert_layout_acc_rowcol(rAccScore.layout()));
         flash::cp_async_wait<0>();
         __syncthreads();
@@ -458,7 +457,7 @@ __global__ void flash_attention_v2_cutlass_mask_kernel(
         flash::gemm_smem(rAccScore, tSrQ, tSrK, tSsQ, tSsK, tiled_mma, smem_tiled_copy_Q, smem_tiled_copy_K,
             smem_thr_copy_Q, smem_thr_copy_K
         );
-        flash::apply_mask(rAccScore, n_block * kBlockN, MASK_N);
+
         Tensor scores = make_tensor(rAccScore.data(), flash::convert_layout_acc_rowcol(rAccScore.layout()));
 
         flash::cp_async_wait<0>();
@@ -535,7 +534,7 @@ __global__ void flash_attention_v2_cutlass_mask_kernel(
 }
 
 
-void flash_attention_cuda_mask(void* Q_ptr, void* K_ptr, void* V_ptr, int* BatchMask,
+void flash_attention_cuda(void* Q_ptr, void* K_ptr, void* V_ptr, 
                    void* O_ptr, 
                    size_t BATCH, size_t M, size_t N, size_t NUM_HEADS, float softmax_scale, cudaStream_t stream){
 
@@ -547,24 +546,24 @@ void flash_attention_cuda_mask(void* Q_ptr, void* K_ptr, void* V_ptr, int* Batch
         dim3 grid(num_m_block, BATCH * NUM_HEADS, 1);
         dim3 block(threads);
         if(M % M_BLOCK == 0 && N % N_BLOCK == 0 ){
-            auto kernel = &flash_attention_v2_cutlass_mask_kernel<true>;
+            auto kernel = &flash_attention_v2_cutlass_kernel<true>;
             int smem_size = int(N_BLOCK*64*2 + M_BLOCK*64);
             if (smem_size >= 48 * 1024) {
                 cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size);
             }
-            kernel<<<grid, block, smem_size, stream>>>((float_e4m3_t*)Q_ptr, (float_e4m3_t*)K_ptr, (float_e4m3_t*)V_ptr, BatchMask, (float_e4m3_t*)O_ptr, BATCH, NUM_HEADS, M, N, softmax_scale);
+            kernel<<<grid, block, smem_size, stream>>>((float_e4m3_t*)Q_ptr, (float_e4m3_t*)K_ptr, (float_e4m3_t*)V_ptr, (float_e4m3_t*)O_ptr, BATCH, M, N, softmax_scale);
         } else {
-            auto kernel = &flash_attention_v2_cutlass_mask_kernel<false>;
+            auto kernel = &flash_attention_v2_cutlass_kernel<false>;
             int smem_size = int(N_BLOCK*64*2 + M_BLOCK*64);
             if (smem_size >= 48 * 1024) {
                 cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size);
             }
-            kernel<<<grid, block, smem_size, stream>>>((float_e4m3_t*)Q_ptr, (float_e4m3_t*)K_ptr, (float_e4m3_t*)V_ptr, BatchMask, (float_e4m3_t*)O_ptr, BATCH, NUM_HEADS, M, N, softmax_scale);
+            kernel<<<grid, block, smem_size, stream>>>((float_e4m3_t*)Q_ptr, (float_e4m3_t*)K_ptr, (float_e4m3_t*)V_ptr, (float_e4m3_t*)O_ptr, BATCH, M, N, softmax_scale);
         }
         
 }
 
 
-void flash_attention_cuda_mask(void* Q_ptr, void* K_ptr, void* V_ptr, int* BatchMask,
+void flash_attention_cuda(void* Q_ptr, void* K_ptr, void* V_ptr, 
                    void* O_ptr, 
                    size_t BATCH, size_t M, size_t N, size_t NUM_HEADS, float softmax_scale, cudaStream_t stream);
