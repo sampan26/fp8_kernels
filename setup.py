@@ -9,7 +9,7 @@ from torch.utils.cpp_extension import (
     CUDA_HOME,
 )
 
-PACKAGE_NAME = "q8_matmul"
+PACKAGE_NAME = "q8_kernels"
 
 ext_modules = []
 generator_flag = []
@@ -37,7 +37,7 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 ext_modules.append(
     CUDAExtension(
         # package name for import
-        name="q8_matmul.gemm._C",
+        name="q8_kernels.gemm._C",
         sources=[
             "csrc/gemm/q8_gemm_api.cpp",
             "csrc/gemm/q8_matmul.cu",
@@ -78,7 +78,7 @@ ext_modules.append(
 ext_modules.append(
     CUDAExtension(
         # package name for import
-        name="q8_matmul.quantizer._C",
+        name="q8_kernels.quantizer._C",
         sources=[
             "csrc/quantizer/tokenwise_quant.cpp",
             "csrc/quantizer/tokenwise_quant_cuda.cu",
@@ -119,7 +119,7 @@ ext_modules.append(
 ext_modules.append(
     CUDAExtension(
         # package name for import
-        name="q8_matmul.ops._C",
+        name="q8_kernels.ops._C",
         sources=[
             "csrc/ops/ops_api.cpp",
 
@@ -161,47 +161,6 @@ ext_modules.append(
             Path(current_dir) / "third_party/cutlass/tools/utils/include" ,
             Path(current_dir) / "third_party/cutlass/examples/common" ,
             # Path(current_dir) / "some" / "thing" / "more",
-        ],
-    )
-)
-
-ext_modules.append(
-    CUDAExtension(
-        # package name for import
-        name="q8_matmul.flash_attention._C",
-        sources=[
-            "csrc/flash_attention/flash_attention.cpp",
-            "csrc/flash_attention/flash_attention_cuda.cu",
-            "csrc/flash_attention/flash_attention_cuda_mask.cu",
-        ],
-          extra_compile_args={
-            # add c compile flags
-            "cxx": ["-O3", "-std=c++17"] + generator_flag,
-            # add nvcc compile flags
-            "nvcc": [
-                    "-O3",
-                    "-std=c++17",
-                    "-U__CUDA_NO_HALF_OPERATORS__",
-                    "--use_fast_math",
-                    "-lineinfo",
-                    "--ptxas-options=-v",
-                    "--ptxas-options=-O2",
-                    "-U__CUDA_NO_HALF_OPERATORS__",
-                    "-U__CUDA_NO_HALF_CONVERSIONS__",
-                    "-U__CUDA_NO_HALF2_OPERATORS__",
-                    "-U__CUDA_NO_BFLOAT16_CONVERSIONS__",
-                    "--expt-relaxed-constexpr",
-                    "--expt-extended-lambda",
-                ]
-                + generator_flag
-                + cc_flag,
-        },
-        include_dirs=[
-            Path(this_dir) / "csrc"/"flash_attention",
-            Path(this_dir) / "third_party/cutlass/include",
-            Path(this_dir) / "third_party/cutlass/tools/utils/include" ,
-            Path(this_dir) / "third_party/cutlass/examples/common" ,
-            # Path(this_dir) / "some" / "thing" / "more",
         ],
     )
 )

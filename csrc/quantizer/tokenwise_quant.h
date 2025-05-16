@@ -8,7 +8,7 @@ struct QuantizerParamsBase {
 
     index_t x_batch_stride;
     index_t out_batch_stride;
-    index_t out_batch_scale_stride;
+    index_t out_scales_batch_stride;
 
     void *__restrict__ x_ptr;
     void *__restrict__ out_ptr;

@@ -30,13 +30,13 @@ cd third_party
 git clone https://github.com/NVIDIA/cutlass.git
 cd ..
 
-mkdir -p q8_matmul/gemm
-mkdir -p q8_matmul/ops
-mkdir -p q8_matmul/quantizer
-touch q8_matmul/__init__.py
-touch q8_matmul/gemm/__init__.py
-touch q8_matmul/ops/__init__.py
-touch q8_matmul/quantizer/__init__.py
+mkdir -p q8_kernels/gemm
+mkdir -p q8_kernels/ops
+mkdir -p q8_kernels/quantizer
+touch q8_kernels/__init__.py
+touch q8_kernels/gemm/__init__.py
+touch q8_kernels/ops/__init__.py
+touch q8_kernels/quantizer/__init__.py
 
 
 python setup.py build_ext --inplace

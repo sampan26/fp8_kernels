@@ -176,7 +176,7 @@ inline __device__ void scale_apply_exp2(Tensor<Engine0, Layout0> &tensor, Tensor
     // constexpr float sm_scale = softmax_scale*1.44269504f;
     #pragma unroll
     for (int mi = 0; mi < size<0>(tensor); ++mi) {
-        const float max_scaled = max(mi) == -INFINITY ? 0.0f : -max(mi) * softmax_scale + 8.80735491f;
+        const float max_scaled = max(mi) == -INFINITY ? 0.0f : -max(mi) * softmax_scale;
         #pragma unroll
         for (int ni = 0; ni < size<1>(tensor); ++ni)  {
             tensor(mi, ni) =  exp2f(tensor(mi, ni) * softmax_scale + max_scaled);        
@@ -317,7 +317,7 @@ __global__ void flash_attention_v2_cutlass_mask_kernel(
     const int bs_head_offset_v = base_id * kHeadDim * V_N;
 
     const int MASK_N = BatchMask[base_id / (int)HEADS];    
-
+   
     Tensor Q = make_tensor(
         make_gmem_ptr(Q_ptr + bs_head_offset_q),
         make_shape(M, Int<kHeadDim>{}),
@@ -553,6 +553,7 @@ void flash_attention_cuda_mask(void* Q_ptr, void* K_ptr, void* V_ptr, int* Batch
                 cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size);
             }
             kernel<<<grid, block, smem_size, stream>>>((float_e4m3_t*)Q_ptr, (float_e4m3_t*)K_ptr, (float_e4m3_t*)V_ptr, BatchMask, (float_e4m3_t*)O_ptr, BATCH, NUM_HEADS, M, N, softmax_scale);
+            // C10_CUDA_KERNEL_LAUNCH_CHECK();
         } else {
             auto kernel = &flash_attention_v2_cutlass_mask_kernel<false>;
             int smem_size = int(N_BLOCK*64*2 + M_BLOCK*64);
@@ -560,6 +561,7 @@ void flash_attention_cuda_mask(void* Q_ptr, void* K_ptr, void* V_ptr, int* Batch
                 cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size);
             }
             kernel<<<grid, block, smem_size, stream>>>((float_e4m3_t*)Q_ptr, (float_e4m3_t*)K_ptr, (float_e4m3_t*)V_ptr, BatchMask, (float_e4m3_t*)O_ptr, BATCH, NUM_HEADS, M, N, softmax_scale);
+            // C10_CUDA_KERNEL_LAUNCH_CHECK();
         }
         
 }

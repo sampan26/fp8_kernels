@@ -1,4 +1,4 @@
 .venv
-third_party
-q8_matmul
+q8_kernels
 build
+third_party

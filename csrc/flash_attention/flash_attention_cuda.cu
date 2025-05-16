@@ -21,7 +21,6 @@
 #include "mma_sm89_traits.hpp"
 
 
-
 namespace flash {
 
 template<typename Tensor0, typename Tensor1, typename Tensor2, typename Tensor3,
@@ -176,13 +175,14 @@ inline __device__ void scale_apply_exp2(Tensor<Engine0, Layout0> &tensor, Tensor
     // constexpr float sm_scale = softmax_scale*1.44269504f;
     #pragma unroll
     for (int mi = 0; mi < size<0>(tensor); ++mi) {
-        const float max_scaled = max(mi) == -INFINITY ? 0.0f : -max(mi) * softmax_scale + 8.80735491f;
+        const float max_scaled = max(mi) == -INFINITY ? 0.0f : max(mi) * softmax_scale;
         #pragma unroll
         for (int ni = 0; ni < size<1>(tensor); ++ni)  {
-            tensor(mi, ni) =  exp2f(tensor(mi, ni) * softmax_scale + max_scaled);        
+            tensor(mi, ni) =  exp2f(tensor(mi, ni) * softmax_scale - max_scaled + 8.0f);        
         }
     }
 }
+
 
 
 template<typename Layout>
@@ -552,6 +552,7 @@ void flash_attention_cuda(void* Q_ptr, void* K_ptr, void* V_ptr,
                 cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size);
             }
             kernel<<<grid, block, smem_size, stream>>>((float_e4m3_t*)Q_ptr, (float_e4m3_t*)K_ptr, (float_e4m3_t*)V_ptr, (float_e4m3_t*)O_ptr, BATCH, M, N, softmax_scale);
+           
         } else {
             auto kernel = &flash_attention_v2_cutlass_kernel<false>;
             int smem_size = int(N_BLOCK*64*2 + M_BLOCK*64);
@@ -560,7 +561,7 @@ void flash_attention_cuda(void* Q_ptr, void* K_ptr, void* V_ptr,
             }
             kernel<<<grid, block, smem_size, stream>>>((float_e4m3_t*)Q_ptr, (float_e4m3_t*)K_ptr, (float_e4m3_t*)V_ptr, (float_e4m3_t*)O_ptr, BATCH, M, N, softmax_scale);
         }
-        
+
 }
 
 
