@@ -98,9 +98,7 @@ at::Tensor rope(at::Tensor &x, at::Tensor& cos_freqs, at::Tensor& sin_freqs, std
         out_type = x.scalar_type();
     }
     at::Tensor out = torch::empty(x.sizes(), x.options().dtype(out_type));
-  
-    at::Tensor out = torch::empty_like(x);
-    
+      
     RopeParamsBase params;
     set_rope_params(params, batch_size, dim, x, cos_freqs, sin_freqs, out);
 

@@ -36,7 +36,6 @@ def quant(x):
     return x_q8, x_scale
 
 
-l_idx = 3
 x = torch.randn(2, 3795, 2048, device='cuda')  # Activation tensor
 w = torch.randn(8192, 2048, device='cuda')     # FFN projection weight
 

@@ -42,11 +42,8 @@ def quant(x):
     x_q8 =  (x.float() / x_scale[..., None]).round().to(torch.int8)
     return x_q8, x_scale
 
-
-l_idx = 3
-x = torch.load(f"/data/LTXVideo/acts/ffn/hs-{l_idx}.pt", map_location="cuda")[:, :, :]
-model_weights = load_file("/data/ltx_weights/unet/unet_diffusion_pytorch_model.safetensors", device="cpu")
-w = model_weights[f"transformer_blocks.{l_idx}.ff.net.0.proj.weight"].cuda()
+x = torch.randn(2, 3795, 2048, device='cuda')  # Activation tensor
+w = torch.randn(8192, 2048, device='cuda')     # FFN projection weight
 
 k = x.shape[-1]
 x_hadamard = hadamard_transform(x.to(torch.float8_e4m3fn), scale=1/math.sqrt(k))

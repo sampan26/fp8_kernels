@@ -163,7 +163,8 @@ void rms_norm_kernel(RMSNormsParamsBase params) {
         }
     }
     
-    store_output<ThreadElems, vec_t, input_t, output_t>(out, x_vals);
+    store_output<ThreadElems, vec_t, output_t>(out, x_vals);
+
 }
 
 
