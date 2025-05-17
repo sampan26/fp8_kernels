@@ -2,10 +2,12 @@ import os
 import torch
 import math
 
-from q8_matmul.gemm._C import q8_mm
-from q8_matmul.quantizer._C import tokenwise_quant
-from q8_matmul.ops._C import rms_norm, fma_8bit
-from q8_matmul.ops._C import fast_hadamard_transform
+from q8_gemm import q8_mm
+from fast_hadamard_transform import hadamard_transform
+
+from safetensors.torch import load_file
+
+import torch.nn.functional as F
 
 def diff_max(a, b):
     return (a.float() - b.float()).abs().max()
@@ -19,11 +21,16 @@ def diff_quantiles(a, b):
         return torch.quantile((a.float() - b.float()).abs()[1, :2048, :], torch.tensor([0.25, 0.5, 0.75, 0.9, 0.99, 1.0]).cuda())
     else:
         return torch.quantile((a.float() - b.float()).abs()[:2048, :], torch.tensor([0.25, 0.5, 0.75, 0.9, 0.99, 1.0]).cuda())
-        
+
+
+def gelu(gate, approximate="tanh"):
+    return F.gelu(gate.to(dtype=torch.float32), approximate=approximate).to(dtype=gate.dtype)
+
+
 
 def hadamard_quant(x):
     k = x.shape[-1]
-    x_hadamard = fast_hadamard_transform(x, 1/math.sqrt(k))
+    x_hadamard = hadamard_transform(x, scale=1/math.sqrt(k))
     x_abs_max_hadamard = x_hadamard.float().abs().max(-1, False).values
     x_scale_hadamard = x_abs_max_hadamard/127.0
     x_q8_hadamard = (x_hadamard.float() / x_scale_hadamard[..., None]).round().to(torch.int8)
@@ -37,12 +44,13 @@ def quant(x):
 
 
 l_idx = 3
-x = torch.randn(2, 3795, 2048, device='cuda')  # Activation tensor
-w = torch.randn(8192, 2048, device='cuda')     # FFN projection weight
+x = torch.load(f"/data/LTXVideo/acts/ffn/hs-{l_idx}.pt", map_location="cuda")[:, :, :]
+model_weights = load_file("/data/ltx_weights/unet/unet_diffusion_pytorch_model.safetensors", device="cpu")
+w = model_weights[f"transformer_blocks.{l_idx}.ff.net.0.proj.weight"].cuda()
 
 k = x.shape[-1]
-x_hadamard = fast_hadamard_transform(x.to(torch.float8_e4m3fn), 1/math.sqrt(k))
-w_hadamard = fast_hadamard_transform(w.to(torch.float8_e4m3fn), 1/math.sqrt(k))
+x_hadamard = hadamard_transform(x.to(torch.float8_e4m3fn), scale=1/math.sqrt(k))
+w_hadamard = hadamard_transform(w.to(torch.float8_e4m3fn), scale=1/math.sqrt(k))
 
 x_quant_h, x_scales_h = hadamard_quant(x.to(torch.float8_e4m3fn))
 w_quant_h, w_scales_h = hadamard_quant(w.to(torch.float8_e4m3fn))
@@ -50,15 +58,14 @@ w_quant_h, w_scales_h = hadamard_quant(w.to(torch.float8_e4m3fn))
 x_quant, x_scales = quant(x)
 w_quant, w_scales = quant(w)
 
-o_q8_h = q8_mm(x_quant_h[0].contiguous(), w_quant_h, x_scales_h, w_scales_h, False)
-o_q8_h = q8_mm(x_quant_h, w_quant_h, x_scales_h, w_scales_h, False)
-o_q8 = q8_mm(x_quant, w_quant, x_scales, w_scales, False)
+o_q8_h = q8_mm(x_quant_h, w_quant_h, x_scales_h, w_scales_h, True)
+o_q8 = q8_mm(x_quant, w_quant, x_scales, w_scales, True)
 
-o_q8_torch_h = ((x_scales_h[..., None] * w_scales_h[None, None, :]) * torch.matmul(x_quant_h.float(), w_quant_h.float().t())).to(torch.float8_e4m3fn)
-o_q8_torch = ((x_scales[..., None] * w_scales[None, None, :]) * torch.matmul(x_quant.float(), w_quant.float().t())).to(torch.float8_e4m3fn)
+o_q8_torch_h = gelu(((x_scales_h[..., None] * w_scales_h[None, None, :]) * torch.matmul(x_quant_h.float(), w_quant_h.float().t()))).to(torch.float8_e4m3fn)
+o_q8_torch = gelu(((x_scales[..., None] * w_scales[None, None, :]) * torch.matmul(x_quant.float(), w_quant.float().t()))).to(torch.float8_e4m3fn)
 
 
-o_orig = torch.matmul(x.to(torch.float8_e4m3fn).half(), w.to(torch.float8_e4m3fn).half().t())# nn.functional.linear(x, w, bias=None)
+o_orig = gelu(torch.matmul(x.to(torch.float8_e4m3fn).half(), w.to(torch.float8_e4m3fn).half().t()))# nn.functional.linear(x, w, bias=None)
 
 
 diff_q8_h = diff_max(o_q8_h, o_orig)
@@ -66,7 +73,7 @@ diff_q8 = diff_max(o_q8, o_orig)
 diff_q8_torch_h = diff_max(o_q8_torch_h, o_orig)
 diff_q8_torch = diff_max(o_q8_torch, o_orig)
 
-o_fp8_orig = torch._scaled_mm(x[1].to(torch.float8_e4m3fn),  w.to(torch.float8_e4m3fn).contiguous().t(), scale_a=torch.tensor([1.0]).cuda(), scale_b=torch.tensor([1.0]).cuda())
+o_fp8_orig = gelu(torch._scaled_mm(x[1].to(torch.float8_e4m3fn),  w.to(torch.float8_e4m3fn).contiguous().t(), scale_a=torch.tensor([1.0]).cuda(), scale_b=torch.tensor([1.0]).cuda()))
 
 print("DIFF Hadamard: ", diff_q8_h)
 print("DIFF no Hadamard: ", diff_q8)
@@ -126,7 +133,7 @@ for _ in range(N_OUTER_ROUNDS):
     end_events = [ torch.cuda.Event(True) for _ in range(N_ROUNDS)]
     for i in range(N_ROUNDS):
         start_events[i].record()
-        o_fp8_orig = torch._scaled_mm(x_hadamard[0],  _w, scale_a=torch.tensor([1.0]).cuda(), scale_b=torch.tensor([1.0]).cuda())
+        o_fp8_orig = gelu(torch._scaled_mm(x_hadamard[0],  _w, scale_a=torch.tensor([1.0]).cuda(), scale_b=torch.tensor([1.0]).cuda()))
         end_events[i].record()
     torch.cuda.synchronize()
     elapsed_times = [s.elapsed_time(e) for s, e in zip(start_events, end_events)]
