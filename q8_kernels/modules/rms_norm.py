@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 
 import q8_kernels.functional as Q8F
+from typing import *
 
 class RMSNorm(nn.Module):
     def __init__(self, dim: int, elementwise_affine: bool = True, device=None):

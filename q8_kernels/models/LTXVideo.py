@@ -34,6 +34,7 @@ class LTXTransformer3DModel(ModelMixin, ConfigMixin):
         positional_embedding_max_pos: Optional[List[int]] = None,
         timestep_scale_multiplier: Optional[float] = None,
     ):
+        super().__init__()
         inner_dim = num_attention_heads * attention_head_dim
         self.patchify_proj = nn.Linear(in_channels, inner_dim, bias=True)
         self.transformer_blocks = nn.ModuleList(
@@ -66,6 +67,7 @@ class LTXTransformer3DModel(ModelMixin, ConfigMixin):
         self.positional_embedding_max_pos = positional_embedding_max_pos
         self.positional_embedding_theta = positional_embedding_theta
 
+        self.inner_dim = inner_dim
 
     def get_fractional_positions(self, indices_grid):
         fractional_positions = torch.stack(
@@ -184,3 +186,19 @@ class LTXTransformer3DModel(ModelMixin, ConfigMixin):
             return (hidden_states,)
         return Transformer3DModelOutput(sample=hidden_states)
     
+def get_ltx_transformer():
+    return LTXTransformer3DModel(
+        32,
+        64,
+        128,
+        128,
+        28,
+        2048,
+        True,
+        False,
+        4096,
+        True,
+        10000.0,
+        [20, 2048, 2048],
+        1000
+    )

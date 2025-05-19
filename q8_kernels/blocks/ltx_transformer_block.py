@@ -23,7 +23,7 @@ class LTXTransformerBlock(nn.Module):
         )
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = (
                     ada_values.unbind(dim=2)
-                )
+        )
         norm_hidden_states = self.norm1(hidden_states, non_mm_precision)
         norm_hidden_states = norm_hidden_states * (1 + scale_msa) + shift_msa
         attn_output = self.attn1(norm_hidden_states, freqs_cis, None, attention_mask, non_mm_precision)
